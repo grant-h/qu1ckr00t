@@ -1,0 +1,92 @@
+#!/system/bin/sh
+
+exec_print() {
+  echo "$@"
+  $@
+}
+
+if [ $# -ne 1 ]; then
+  echo "usage: $0 /path/to/magiskinit"
+  exit 1
+fi
+
+MAGISK_DIR="/sbin"
+MAGISK_INIT="$1"
+MAGISK_TMPDIR=`dirname "$1"`
+MAGISK_BIN="$MAGISK_TMPDIR/magisk"
+
+echo "Extracting magisk from $MAGISK_INIT..."
+
+if [ ! -x "$MAGISK_INIT" ]; then
+  echo "$MAGISK_INIT is not executable!"
+  exit 1
+fi
+
+if [ ! -d "$MAGISK_TMPDIR" ]; then
+  echo "$MAGISK_TMPDIR is not a directory!"
+  exit 1
+fi
+
+exec_print "$MAGISK_INIT" -x magisk "$MAGISK_BIN"
+
+if [ $? -ne 0 ] || [ ! -f "$MAGISK_BIN" ]; then
+  echo "Error when extracting magisk binary from magiskinit"
+  exit 1
+fi
+
+chmod +x "$MAGISK_BIN"
+
+mount | grep -q "$MAGISK_DIR type tmpfs"
+
+if [ $? -eq 1 ]; then
+  echo "Overlaying magisk $MAGISK_DIR"
+  mount -t tmpfs tmpfs "$MAGISK_DIR"
+
+  if [ $? -ne 0 ]; then
+    echo "Failed to create magisk mount point"
+    exit 1
+  fi
+fi
+
+exec_print mv "$MAGISK_INIT" "$MAGISK_DIR"
+exec_print mv "$MAGISK_BIN" "$MAGISK_DIR"
+
+if [ -d "/apex" ]; then
+  echo "Creating magisk wrapper for /apex LD_LIBRARY_PATH"
+  exec_print mv "$MAGISK_DIR/magisk" "$MAGISK_DIR/magisk.bin"
+  echo '#!/system/bin/sh' > "$MAGISK_DIR/magisk"
+  echo 'export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/apex/com.android.runtime/lib64"' >> "$MAGISK_DIR/magisk"
+  echo 'exec /sbin/magisk.bin "$0" "$@"' >> "$MAGISK_DIR/magisk"
+  echo "Wrote wrapper to $MAGISK_DIR/magisk"
+  chmod +x "$MAGISK_DIR/magisk"
+fi
+
+"$MAGISK_DIR/magisk" -c
+
+if [ $? -ne 0 ]; then
+  echo "Unable to execute magisk"
+  exit 1
+fi
+
+cd "$MAGISK_DIR"
+
+echo "Setting up magisk symbolic links"
+ln -s /sbin/magisk su
+ln -s /sbin/magisk resetprop
+ln -s /sbin/magisk magiskhide
+ln -s /sbin/magiskinit64 supolicy
+ln -s /sbin/magiskinit64 magiskpolicy
+mkdir .magisk
+ln -s /sbin/.magisk .core
+echo > .magisk/config
+
+chmod 755 . .magisk/ magisk magisk.bin
+
+exec_print /sbin/magisk --post-fs-data
+sleep 1
+exec_print /sbin/magisk --boot-complete
+sleep 1
+exec_print /sbin/magisk --service
+sleep 1
+
+exit 0
